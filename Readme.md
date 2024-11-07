@@ -1,1 +1,1 @@
-# gpt-minima
+# GPT-minima
