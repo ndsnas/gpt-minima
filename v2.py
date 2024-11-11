@@ -5,10 +5,10 @@ from torch.nn import functional as F
 # hyperparameters
 batch_size = 32 # independent sequences that will be processed in parallel
 block_size = 8 # maximum context length
-max_iters = 3000
+max_iters = 5000
 eval_interval = 300
 eval_iters = 200
-learning_rate = 1e-2
+learning_rate = 1e-3
 n_embd = 32
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
 
@@ -64,6 +64,33 @@ def estimate_loss():
     model.train()
     return out
 
+class Head(nn.Module):
+    """ one head of self attention """
+
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)   # (n_embd, C=head_size)
+        self.query = nn.Linear(n_embd, head_size, bias=False) # (n_embd, C=head_size)
+        self.value = nn.Linear(n_embd, head_size, bias=False) # (n_embd, C=head_size)
+        # register buggers are not considered as model parameters
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # (T, T)
+
+    def forward(self, x):
+
+        B, T, C = x.shape
+
+        k = self.key(x)   # (B, T, C)
+        q = self.query(x) # (B, T, C)
+        v = self.value(x) # (B, T, C)
+
+        # NOTE: C and head_size are equal in our case
+        wei = q @ k.transpose(-2, -1) * C**(-0.5) # (B, T, C) @ (B, C, T) ---> (B, T, T)
+        wei = wei.masked_fill(self.tril[:T, :T]==0, float('-inf')) # (B, T, T)
+        wei = F.softmax(wei, dim=-1) # (B, T, T)
+        out = wei @ v # (B, T, T) @ (B, T, C) ---> (B, T, C)
+
+        return out # (B, T, C)
+
 class BigramLangModel(nn.Module):
 
     def __init__(self):
@@ -73,6 +100,8 @@ class BigramLangModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         # this layer provides the embedding for the position of the token
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        # keeping the head_size same as n_embd, generally head_size is of lower dimension than n_embd
+        self.sa_head = Head(head_size=n_embd)
         # linear layer is to convert from n_embd to vocab_size
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
@@ -89,6 +118,9 @@ class BigramLangModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T, C=n_embd)
 
         x = tok_emb + pos_emb # (B, T, C=n_embd) -- by broadcasting
+
+        # apply one head of self attention
+        x = self.sa_head(x) # (B, T, C)
         
         # logits are predictions/scores of next character and here it is simply the embedding of input
         logits = self.lm_head(tok_emb) # (B, T, vocab_size)
@@ -109,8 +141,13 @@ class BigramLangModel(nn.Module):
         # max_new_tokens - number of characters to generate
         # idx - (B, T)
         for _ in range(max_new_tokens):
+            # in the first iteration the tokens will be equal to block size
+            # but after the first iteration the the tokens will keep on increasing (as we're concatenating in the end)
+            # so we need to crop the idx because in the forward method we're generating the positional embeddings
+            # if idx is more than block size position_embedding_table will run out of scope because it has embeddings upto block_size
+            idx_cropped = idx[:, -block_size:] # (B, T)
             # this will return the logits for all the tokens in idx
-            logits, loss = self.forward(idx) # (B, T, C)
+            logits, loss = self.forward(idx_cropped) # (B, T, C)
             # take out the logits for only the last token because we'll generate the next char only on the basis of last char
             logits = logits[:, -1, :] # (B, C)
             # get the probs from logits
