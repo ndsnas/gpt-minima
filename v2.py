@@ -123,7 +123,7 @@ class BigramLangModel(nn.Module):
         x = self.sa_head(x) # (B, T, C)
         
         # logits are predictions/scores of next character and here it is simply the embedding of input
-        logits = self.lm_head(tok_emb) # (B, T, vocab_size)
+        logits = self.lm_head(x) # (B, T, vocab_size)
 
 
         if targets is None:
