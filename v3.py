@@ -69,6 +69,7 @@ class Head(nn.Module):
 
     def __init__(self, head_size):
         super().__init__()
+        self.head_size = head_size
         self.key = nn.Linear(n_embd, head_size, bias=False)   # (n_embd, C=head_size)
         self.query = nn.Linear(n_embd, head_size, bias=False) # (n_embd, C=head_size)
         self.value = nn.Linear(n_embd, head_size, bias=False) # (n_embd, C=head_size)
@@ -83,8 +84,7 @@ class Head(nn.Module):
         q = self.query(x) # (B, T, C)
         v = self.value(x) # (B, T, C)
 
-        # NOTE: C and head_size are equal in our case
-        wei = q @ k.transpose(-2, -1) * C**(-0.5) # (B, T, C) @ (B, C, T) ---> (B, T, T)
+        wei = q @ k.transpose(-2, -1) * self.head_size**(-0.5) # (B, T, hs) @ (B, hs, T) ---> (B, hs, T)
         wei = wei.masked_fill(self.tril[:T, :T]==0, float('-inf')) # (B, T, T)
         wei = F.softmax(wei, dim=-1) # (B, T, T)
         out = wei @ v # (B, T, T) @ (B, T, C) ---> (B, T, C)
