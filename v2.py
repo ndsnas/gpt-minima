@@ -72,7 +72,7 @@ class Head(nn.Module):
         self.key = nn.Linear(n_embd, head_size, bias=False)   # (n_embd, C=head_size)
         self.query = nn.Linear(n_embd, head_size, bias=False) # (n_embd, C=head_size)
         self.value = nn.Linear(n_embd, head_size, bias=False) # (n_embd, C=head_size)
-        # register buggers are not considered as model parameters
+        # register buffers are not considered as model parameters
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # (T, T)
 
     def forward(self, x):
@@ -141,10 +141,10 @@ class BigramLangModel(nn.Module):
         # max_new_tokens - number of characters to generate
         # idx - (B, T)
         for _ in range(max_new_tokens):
-            # in the first iteration the tokens will be equal to block size
+            # in the first iteration the tokens will be less than or equal to block size
             # but after the first iteration the the tokens will keep on increasing (as we're concatenating in the end)
             # so we need to crop the idx because in the forward method we're generating the positional embeddings
-            # if idx is more than block size position_embedding_table will run out of scope because it has embeddings upto block_size
+            # if idx is more than block size, then position_embedding_table will run out of scope because it has embeddings upto block_size
             idx_cropped = idx[:, -block_size:] # (B, T)
             # this will return the logits for all the tokens in idx
             logits, loss = self.forward(idx_cropped) # (B, T, C)
