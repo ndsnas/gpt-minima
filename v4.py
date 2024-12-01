@@ -10,6 +10,8 @@ eval_interval = 300
 eval_iters = 200
 learning_rate = 1e-3
 n_embd = 32
+n_head = 4
+dropout = 0.2
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
 
 torch.manual_seed(1337)
@@ -76,6 +78,8 @@ class Head(nn.Module):
         # register buffers are not considered as model parameters
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # (T, T)
 
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
 
         B, T, C = x.shape
@@ -87,6 +91,7 @@ class Head(nn.Module):
         wei = q @ k.transpose(-2, -1) * self.head_size**(-0.5) # (B, T, hs) @ (B, hs, T) ---> (B, T, T)
         wei = wei.masked_fill(self.tril[:T, :T]==0, float('-inf')) # (B, T, T)
         wei = F.softmax(wei, dim=-1) # (B, T, T)
+        wei = self.dropout(wei)
         out = wei @ v # (B, T, T) @ (B, T, hs) ---> (B, T, hs)
 
         return out # (B, T, hs)
@@ -99,11 +104,12 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         # projection layer (this is just linear transformation, not sure of exact use)
         self.projection = nn.Linear(n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # applying concatenation across channel dimension
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.projection(out)
+        out = self.dropout(self.projection(out))
         return out
     
 class FeedForward(nn.Module):
@@ -116,7 +122,8 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
             # projection layer (this is just linear transformation, not sure of exact use)
-            nn.Linear(4 * n_embd, n_embd)
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout)
         )
     
     def forward(self, x):
@@ -132,12 +139,14 @@ class Block(nn.Module):
         self.sa = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedForward(n_embd)
 
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
     def forward(self, x):
         # Apply self-attention with residual connection
-        x_res = x # Save input to add later
-        x = self.sa(x) + x_res # (residual connection)
-        x_res = x # Save new input for the next layer
-        x = self.ffwd(x) + x_res # (residual connection)
+        # also applying layer-normalization before self-attention and feed-forward
+        x = self.sa(self.ln1(x)) + x # (residual connection)
+        x = self.ffwd(self.ln2(x)) + x # (residual connection)
 
         return x
 
@@ -152,11 +161,12 @@ class BigramLangModel(nn.Module):
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
         
         self.blocks = nn.Sequential(
-            Block(n_embd, 4),
-            Block(n_embd, 4),
-            Block(n_embd, 4)
+            Block(n_embd, n_head),
+            Block(n_embd, n_head),
+            Block(n_embd, n_head)
         )
-
+        # one more layer-normalization at the end of the transformer and right before the final linear layer.
+        self.ln = nn.LayerNorm(n_embd)
         # linear layer is to convert from n_embd to vocab_size
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
@@ -175,6 +185,8 @@ class BigramLangModel(nn.Module):
         x = tok_emb + pos_emb # (B, T, C=n_embd) -- by broadcasting
 
         x = self.blocks(x) # (B, T, C)
+
+        x = self.ln(x)
         
         # logits are predictions/scores of next character and here it is simply the embedding of input
         logits = self.lm_head(x) # (B, T, vocab_size)
@@ -215,6 +227,8 @@ class BigramLangModel(nn.Module):
     
 model = BigramLangModel()
 m = model.to(device)
+
+print(sum(p.numel() for p in m.parameters()), ' parameters')
 
 optimizer = torch.optim.AdamW(model.parameters(), lr = learning_rate)
 
